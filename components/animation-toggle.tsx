@@ -246,7 +246,7 @@ export function AnimationToggle() {
   };
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 bg-background/80 backdrop-blur-sm p-2 rounded-lg border border-border shadow-lg">
+    <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 bg-background/80 backdrop-blur-sm p-2 rounded-lg border border-border shadow-lg">
       <Button
         variant={animationsEnabled ? "default" : "outline"}
         size="sm"
