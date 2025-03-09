@@ -15,6 +15,9 @@ interface SystemMessageWithDocument {
   artifactKind?: string;
 }
 
+// Maximum size for text content in characters
+const MAX_TEXT_CONTENT_SIZE = 1000000; // 1MB of text
+
 export async function POST(request: Request) {
   const session = await auth();
 
@@ -36,11 +39,27 @@ export async function POST(request: Request) {
     const documentId = generateUUID();
     const title = fileName || 'Uploaded Text File';
 
-    // Make sure content is a string and not empty
-    if (!textContent || typeof textContent !== 'string') {
-      console.error('Invalid text content:', typeof textContent);
+    // Validate text content more thoroughly
+    if (!textContent) {
+      console.error('Empty text content');
       return NextResponse.json(
-        { error: 'Invalid text content' },
+        { error: 'Text content cannot be empty' },
+        { status: 400 }
+      );
+    }
+    
+    if (typeof textContent !== 'string') {
+      console.error('Invalid text content type:', typeof textContent);
+      return NextResponse.json(
+        { error: 'Text content must be a string' },
+        { status: 400 }
+      );
+    }
+    
+    if (textContent.length > MAX_TEXT_CONTENT_SIZE) {
+      console.error('Text content too large:', textContent.length);
+      return NextResponse.json(
+        { error: 'Text content is too large. Maximum size is 1MB.' },
         { status: 400 }
       );
     }
@@ -75,9 +94,11 @@ export async function POST(request: Request) {
           console.log(`Verified document saved: ID ${documentId}, Content length: ${savedDoc.content?.length || 0}`);
         } else {
           console.error('Document was not found after saving!');
+          throw new Error('Document verification failed - not found after saving');
         }
       } catch (verifyError) {
         console.error('Error verifying document save:', verifyError);
+        // Don't throw here, we'll still return success since the initial save worked
       }
     } catch (saveError) {
       console.error('Error saving document:', saveError);
@@ -94,9 +115,21 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     console.error('Error creating text artifact:', error);
-    return NextResponse.json(
-      { error: 'Failed to create text artifact' },
-      { status: 500 }
-    );
+    
+    // Provide more specific error messages based on the type of error
+    let errorMessage = 'Failed to create text artifact';
+    let status = 500;
+    
+    if (error instanceof Error) {
+      console.error(`Error name: ${error.name}, message: ${error.message}`);
+      if (error.message.includes('database') || error.message.includes('query')) {
+        errorMessage = 'Database error when saving document. Please try again.';
+      } else if (error.message.includes('content')) {
+        errorMessage = 'Error processing document content. The file may be corrupted.';
+        status = 400;
+      }
+    }
+    
+    return NextResponse.json({ error: errorMessage }, { status });
   }
 } 

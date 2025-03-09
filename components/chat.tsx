@@ -54,7 +54,28 @@ export function Chat({
       mutate('/api/history');
     },
     onError: (error) => {
-      toast.error('An error occured, please try again!');
+      console.error('Chat error occurred:', error);
+      
+      // Handle specific error types with more user-friendly messages
+      let errorMessage = 'An error occurred, please try again!';
+      
+      if (error instanceof Error) {
+        if (error.message.includes('document') || error.message.includes('file')) {
+          errorMessage = 'There was an issue processing your file. Please try uploading a smaller or different file.';
+        } else if (error.message.includes('timeout')) {
+          errorMessage = 'The request timed out. Please try with a simpler query or smaller file.';
+        } else if (error.message.includes('network') || error.message.includes('connection')) {
+          errorMessage = 'Network connection issue. Please check your internet connection and try again.';
+        }
+      }
+      
+      toast.error(errorMessage, {
+        description: 'You can try again or start a new conversation.',
+        action: {
+          label: 'Retry',
+          onClick: () => reload(),
+        },
+      });
     },
   });
 

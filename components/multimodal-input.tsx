@@ -133,10 +133,24 @@ function PureMultimodalInput({
     formData.append('file', file);
 
     try {
+      // Check file size before uploading
+      const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+      if (file.size > MAX_FILE_SIZE) {
+        toast.error(`File ${file.name} is too large (max 10MB)`);
+        return null;
+      }
+
+      // Add timeout to fetch to avoid hanging requests
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
       const response = await fetch('/api/files/upload', {
         method: 'POST',
         body: formData,
+        signal: controller.signal
       });
+
+      clearTimeout(timeoutId);
 
       if (response.ok) {
         const data = await response.json();
@@ -151,10 +165,31 @@ function PureMultimodalInput({
           ...(textContent && { textContent }),
         };
       }
-      const { error } = await response.json();
-      toast.error(error);
+      
+      // Handle response errors
+      if (response.status === 413) {
+        toast.error(`File ${file.name} is too large for the server to process`);
+      } else {
+        try {
+          const { error } = await response.json();
+          toast.error(error || `Failed to upload ${file.name}`);
+        } catch (jsonError) {
+          toast.error(`Failed to upload ${file.name}: ${response.statusText}`);
+        }
+      }
+      return null;
     } catch (error) {
-      toast.error('Failed to upload file, please try again!');
+      console.error('File upload error:', error);
+      if (error instanceof Error) {
+        if (error.name === 'AbortError') {
+          toast.error(`File upload for ${file.name} timed out. Please try a smaller file.`);
+        } else {
+          toast.error(`Failed to upload ${file.name}: ${error.message}`);
+        }
+      } else {
+        toast.error(`Failed to upload ${file.name}, please try again!`);
+      }
+      return null;
     }
   };
 
@@ -199,6 +234,18 @@ function PureMultimodalInput({
       try {
         console.log('Creating text artifact for:', textAttachment.name);
         
+        // Check if the text content is too large
+        const MAX_TEXT_SIZE = 1000000; // 1MB
+        if (textAttachment.textContent && textAttachment.textContent.length > MAX_TEXT_SIZE) {
+          console.warn(`Text content too large: ${textAttachment.textContent.length} characters`);
+          toast.error(`File ${textAttachment.name} is too large to process (max 1MB of text)`);
+          continue;
+        }
+        
+        // Add timeout to avoid hanging requests
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+        
         const artifactResponse = await fetch('/api/text-artifact', {
           method: 'POST',
           headers: {
@@ -210,7 +257,10 @@ function PureMultimodalInput({
             fileName: textAttachment.name,
             textContent: textAttachment.textContent,
           }),
+          signal: controller.signal
         });
+
+        clearTimeout(timeoutId);
 
         if (artifactResponse.ok) {
           const artifactData = await artifactResponse.json();
@@ -233,56 +283,79 @@ function PureMultimodalInput({
             setMessages(currentMessages => [...currentMessages, documentMessage]);
             
             // Make a direct API call to create the chat with just the artifact
-            const chatResponse = await fetch('/api/chat', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                id: chatId,
-                messages: [documentMessage],
-                selectedChatModel: 'chat-model-small', // Default model
-              }),
-            });
-            
-            if (chatResponse.ok) {
-              // Add a user message that displays the artifact
-              const toolInvocation = {
-                toolName: 'createDocument',
-                toolCallId: generateUUID(),
-                state: 'result' as const,
-                args: {
-                  title: artifactData.title,
+            try {
+              const chatResponse = await fetch('/api/chat', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
                 },
-                result: {
-                  id: artifactData.documentId,
-                  kind: 'text',
-                  title: artifactData.title,
-                }
-              };
+                body: JSON.stringify({
+                  id: chatId,
+                  messages: [documentMessage],
+                  selectedChatModel: 'chat-model-small', // Default model
+                }),
+              });
+              
+              if (chatResponse.ok) {
+                // Add a user message that displays the artifact
+                const toolInvocation = {
+                  toolName: 'createDocument',
+                  toolCallId: generateUUID(),
+                  state: 'result' as const,
+                  args: {
+                    title: artifactData.title,
+                  },
+                  result: {
+                    id: artifactData.documentId,
+                    kind: 'text',
+                    title: artifactData.title,
+                  }
+                };
 
-              // Create an assistant message to display the artifact
-              const assistantMessage: Message = {
-                id: generateUUID(),
-                role: 'assistant',
-                content: `I've created a document "${artifactData.title}" from your uploaded text file.`,
-                createdAt: new Date(),
-                toolInvocations: [toolInvocation],
-              };
+                // Create an assistant message to display the artifact
+                const assistantMessage: Message = {
+                  id: generateUUID(),
+                  role: 'assistant',
+                  content: `I've created a document "${artifactData.title}" from your uploaded text file.`,
+                  createdAt: new Date(),
+                  toolInvocations: [toolInvocation],
+                };
 
-              // Add the assistant message to show the artifact in the UI
-              setMessages(currentMessages => [...currentMessages, assistantMessage]);
+                // Add the assistant message to show the artifact in the UI
+                setMessages(currentMessages => [...currentMessages, assistantMessage]);
+                toast.success(`Created document from ${textAttachment.name}`);
+              } else {
+                const errorText = await chatResponse.text();
+                console.error('Failed to register document with chat API:', errorText);
+                toast.error(`Document created but couldn't be added to the chat.`);
+              }
+            } catch (chatError) {
+              console.error('Error in chat API call:', chatError);
+              toast.error(`Document created but couldn't be added to the chat.`);
             }
-            
-            toast.success(`Created document from ${textAttachment.name}`);
           }
         } else {
-          console.error('Failed to create text artifact, response:', await artifactResponse.text());
-          toast.error(`Failed to create document from ${textAttachment.name}`);
+          // Handle specific response errors
+          try {
+            const errorData = await artifactResponse.json();
+            console.error('Failed to create text artifact, response:', errorData);
+            toast.error(errorData.error || `Failed to create document from ${textAttachment.name}`);
+          } catch (jsonError) {
+            console.error('Error parsing error response:', jsonError, 'Status:', artifactResponse.status);
+            toast.error(`Failed to create document from ${textAttachment.name}: ${artifactResponse.statusText}`);
+          }
         }
       } catch (error) {
         console.error('Error creating text artifact:', error);
-        toast.error(`Error creating document from ${textAttachment.name}`);
+        if (error instanceof Error) {
+          if (error.name === 'AbortError') {
+            toast.error(`Processing ${textAttachment.name} timed out. Please try a smaller file.`);
+          } else {
+            toast.error(`Error processing ${textAttachment.name}: ${error.message}`);
+          }
+        } else {
+          toast.error(`Error creating document from ${textAttachment.name}`);
+        }
       }
     }
     

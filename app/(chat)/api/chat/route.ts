@@ -102,13 +102,18 @@ export async function POST(request: Request) {
     );
     
     if (documentMessages.length > 0) {
-      await saveMessages({
-        messages: documentMessages.map(message => ({
-          ...message,
-          chatId: id,
-          createdAt: new Date(),
-        })),
-      });
+      try {
+        await saveMessages({
+          messages: documentMessages.map(message => ({
+            ...message,
+            chatId: id,
+            createdAt: new Date(),
+          })),
+        });
+      } catch (error) {
+        console.error('Error saving document messages:', error);
+        // Continue processing even if message saving fails
+      }
     }
 
     // If there's no user message yet (just artifacts), we're done
@@ -132,16 +137,24 @@ export async function POST(request: Request) {
         for (const docMessage of documentMessages) {
           if (docMessage && 'documentId' in docMessage && docMessage.documentId) {
             try {
-              const document = await getDocumentById({ id: String(docMessage.documentId) });
+              const documentId = String(docMessage.documentId);
+              console.log(`Fetching document with ID: ${documentId}`);
+              
+              const document = await getDocumentById({ id: documentId });
+              
               if (document && document.content) {
+                console.log(`Found document: ${document.title}, content length: ${document.content.length}`);
                 const truncatedContent = document.content.length > MAX_FILE_CONTENT_SIZE 
                   ? document.content.substring(0, MAX_FILE_CONTENT_SIZE) + "... [content truncated]" 
                   : document.content;
                 
                 documentContents += `\n\n--- Document: ${document.title} ---\n${truncatedContent}\n\n`;
+              } else {
+                console.error(`Document not found or has no content: ${documentId}`);
               }
             } catch (error) {
               console.error('Error retrieving document:', error);
+              // Continue with other documents if one fails
             }
           }
         }
@@ -153,17 +166,37 @@ export async function POST(request: Request) {
             content: `I'm asking about this document:\n${documentContents}\n\nMy question: ${userMessage.content}`
           };
           
-          const enhancedMessages = processedMessages.map(msg => 
-            msg.id === userMessage.id ? enhancedUserMessage : msg
-          );
+          // Make a clean copy without document references to avoid serialization issues
+          processedMessages = processedMessages.map(msg => ({
+            id: msg.id,
+            role: msg.role,
+            content: msg.id === userMessage.id ? enhancedUserMessage.content : msg.content,
+            createdAt: msg.createdAt
+          }));
           
-          // Filter out system messages with document artifacts
-          processedMessages = enhancedMessages.filter(message => 
+          // Filter out system messages with document artifacts since they've been merged into the user message
+          processedMessages = processedMessages.filter(message => 
             !(message.role === 'system' && 'documentId' in message)
           );
+        } else {
+          console.warn('No document contents found despite having document references');
+          // If we couldn't get document contents, create a clean copy without the problematic fields
+          processedMessages = processedMessages.map(msg => ({
+            id: msg.id,
+            role: msg.role,
+            content: msg.content,
+            createdAt: msg.createdAt
+          }));
         }
       } catch (error) {
         console.error('Error enhancing user message with document content:', error);
+        // If document enhancement fails, create a clean copy without the problematic fields
+        processedMessages = processedMessages.map(msg => ({
+          id: msg.id,
+          role: msg.role,
+          content: msg.content,
+          createdAt: msg.createdAt
+        }));
       }
     }
 
@@ -219,7 +252,7 @@ export async function POST(request: Request) {
                   }),
                 });
               } catch (error) {
-                console.error('Failed to save chat');
+                console.error('Failed to save chat', error);
               }
             }
           },
@@ -243,7 +276,25 @@ export async function POST(request: Request) {
     });
   } catch (error: unknown) {
     console.error('Unexpected error in chat API:', error);
-    return new Response('An unexpected error occurred. Please try again.', { status: 500 });
+    
+    // Provide more detailed error information based on the type of error
+    let errorMessage = 'An unexpected error occurred. Please try again.';
+    let statusCode = 500;
+    
+    if (error instanceof Error) {
+      console.error(`Error name: ${error.name}, message: ${error.message}`);
+      console.error(`Stack trace: ${error.stack}`);
+      
+      if (error.message.includes('document') || error.message.includes('Document')) {
+        errorMessage = 'Error processing document. The file might be corrupted or too large.';
+      } else if (error.message.includes('database') || error.message.includes('query')) {
+        errorMessage = 'Database error. Please try again later.';
+      } else if (error.message.includes('timeout') || error.message.includes('timed out')) {
+        errorMessage = 'The request timed out. Please try with a smaller file or simpler query.';
+      }
+    }
+    
+    return new Response(errorMessage, { status: statusCode });
   }
 }
 
