@@ -31,6 +31,7 @@ export function DataStreamHandler({ id }: { id: string }) {
   const lastProcessedIndex = useRef(-1);
   const reasoningRef = useRef('');
   const currentMessageIdRef = useRef<string | null>(null);
+  const textContentRef = useRef('');
 
   useEffect(() => {
     if (!dataStream?.length) return;
@@ -56,11 +57,36 @@ export function DataStreamHandler({ id }: { id: string }) {
         reasoningRef.current += delta.content;
       }
 
+      // Handle text-delta type for o1 model responses
+      if (delta.type === 'text-delta' && typeof delta.content === 'string') {
+        textContentRef.current += delta.content;
+        
+        // Update the messages array with the accumulated text
+        if (currentMessageIdRef.current) {
+          setMessages((prevMessages) => {
+            return prevMessages.map(msg => {
+              if (msg.id === currentMessageIdRef.current) {
+                return {
+                  ...msg,
+                  content: textContentRef.current
+                };
+              }
+              return msg;
+            });
+          });
+        }
+      }
+
       // Handle message type for o1 model responses
       if (delta.type === 'message' && typeof delta.content === 'string') {
         try {
           const message = JSON.parse(delta.content);
           if (message && message.role === 'assistant') {
+            // Reset text content for new message
+            if (currentMessageIdRef.current !== message.id) {
+              textContentRef.current = '';
+            }
+            
             currentMessageIdRef.current = message.id;
             
             // Add reasoning if we've collected any

@@ -258,6 +258,20 @@ export async function POST(request: Request) {
               let reasoning = '';
               let isReasoningSection = false;
               
+              // Create an initial empty message to be updated incrementally
+              const initialMessage = {
+                id: messageId,
+                role: 'assistant',
+                content: '',
+                createdAt: new Date()
+              };
+              
+              // Send the initial message to the client
+              dataStream.writeData({
+                type: 'message',
+                content: JSON.stringify(initialMessage)
+              });
+              
               // Process the streaming response
               for await (const chunk of response) {
                 // Check for reasoning in the response
@@ -279,7 +293,7 @@ export async function POST(request: Request) {
                   
                   // Send the content chunk to the data stream
                   dataStream.writeData({
-                    type: 'text',
+                    type: 'text-delta',
                     content: content
                   });
                 }
