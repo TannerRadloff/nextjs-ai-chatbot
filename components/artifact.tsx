@@ -32,6 +32,7 @@ import { sheetArtifact } from '@/artifacts/sheet/client';
 import { textArtifact } from '@/artifacts/text/client';
 import equal from 'fast-deep-equal';
 import { ExtendedAttachment } from '@/types';
+import { toast } from 'sonner';
 
 export const artifactDefinitions = [
   textArtifact,
@@ -97,6 +98,57 @@ function PureArtifact({
   ) => Promise<string | null | undefined>;
   isReadonly: boolean;
 }) {
+  // Utility function to handle API response errors
+  const handleApiError = useCallback(async (response: Response, defaultMessage: string) => {
+    if (!response.ok) {
+      let errorMessage = defaultMessage;
+      
+      try {
+        const errorData = await response.json();
+        if (errorData && errorData.error) {
+          errorMessage = errorData.error;
+        }
+      } catch (e) {
+        // If we can't parse the JSON, use the status text or default message
+        errorMessage = response.statusText || defaultMessage;
+      }
+      
+      // Handle specific status codes
+      switch (response.status) {
+        case 400:
+          toast.error(`Invalid request: ${errorMessage}`);
+          break;
+        case 401:
+          toast.error(`Authentication required: ${errorMessage}`);
+          break;
+        case 403:
+          toast.error(`Permission denied: ${errorMessage}`);
+          break;
+        case 404:
+          toast.error(`Document not found: ${errorMessage}`);
+          break;
+        case 413:
+          toast.error(`Content too large: ${errorMessage}`);
+          break;
+        case 429:
+          toast.error(`Rate limit exceeded: ${errorMessage}`);
+          break;
+        case 500:
+        case 502:
+        case 503:
+        case 504:
+          toast.error(`Server error: ${errorMessage}`);
+          break;
+        default:
+          toast.error(`Error: ${errorMessage}`);
+      }
+      
+      return false;
+    }
+    
+    return true;
+  }, []);
+
   const { artifact, setArtifact, metadata, setMetadata } = useArtifact();
 
   const {
@@ -118,16 +170,25 @@ function PureArtifact({
 
   useEffect(() => {
     if (documents && documents.length > 0) {
-      const mostRecentDocument = documents.at(-1);
+      try {
+        const mostRecentDocument = documents.at(-1);
 
-      if (mostRecentDocument) {
-        setDocument(mostRecentDocument);
-        setCurrentVersionIndex(documents.length - 1);
-        setArtifact((currentArtifact) => ({
-          ...currentArtifact,
-          content: mostRecentDocument.content ?? '',
-        }));
+        if (mostRecentDocument) {
+          setDocument(mostRecentDocument);
+          setCurrentVersionIndex(documents.length - 1);
+          setArtifact((currentArtifact) => ({
+            ...currentArtifact,
+            content: mostRecentDocument.content ?? '',
+          }));
+        } else {
+          toast.error('Could not find the most recent document version');
+        }
+      } catch (error: unknown) {
+        console.error('Error setting document from documents:', error);
+        toast.error(`Failed to load document: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
+    } else if (documents && documents.length === 0) {
+      toast.error('No document versions found');
     }
   }, [documents, setArtifact]);
 
@@ -139,47 +200,69 @@ function PureArtifact({
   const [isContentDirty, setIsContentDirty] = useState(false);
 
   const handleContentChange = useCallback(
-    (updatedContent: string) => {
+    async (updatedContent: string) => {
       if (!artifact) return;
 
-      mutate<Array<Document>>(
-        `/api/document?id=${artifact.documentId}`,
-        async (currentDocuments) => {
-          if (!currentDocuments) return undefined;
+      try {
+        mutate<Array<Document>>(
+          `/api/document?id=${artifact.documentId}`,
+          async (currentDocuments) => {
+            if (!currentDocuments) {
+              toast.error('Failed to retrieve document data');
+              return undefined;
+            }
 
-          const currentDocument = currentDocuments.at(-1);
+            const currentDocument = currentDocuments.at(-1);
 
-          if (!currentDocument || !currentDocument.content) {
-            setIsContentDirty(false);
+            if (!currentDocument || !currentDocument.content) {
+              setIsContentDirty(false);
+              toast.error('Document content is missing or invalid');
+              return currentDocuments;
+            }
+
+            if (currentDocument.content !== updatedContent) {
+              try {
+                const response = await fetch(`/api/document?id=${artifact.documentId}`, {
+                  method: 'POST',
+                  body: JSON.stringify({
+                    title: artifact.title,
+                    content: updatedContent,
+                    kind: artifact.kind,
+                  }),
+                });
+
+                const isSuccess = await handleApiError(response, 'Failed to save document');
+                
+                if (!isSuccess) {
+                  return currentDocuments;
+                }
+
+                setIsContentDirty(false);
+                toast.success('Document saved successfully');
+
+                const newDocument = {
+                  ...currentDocument,
+                  content: updatedContent,
+                  createdAt: new Date(),
+                };
+
+                return [...currentDocuments, newDocument];
+              } catch (error) {
+                console.error('Error saving document:', error);
+                toast.error(`Failed to save document: ${error instanceof Error ? error.message : 'Unknown error'}`);
+                return currentDocuments;
+              }
+            }
             return currentDocuments;
-          }
-
-          if (currentDocument.content !== updatedContent) {
-            await fetch(`/api/document?id=${artifact.documentId}`, {
-              method: 'POST',
-              body: JSON.stringify({
-                title: artifact.title,
-                content: updatedContent,
-                kind: artifact.kind,
-              }),
-            });
-
-            setIsContentDirty(false);
-
-            const newDocument = {
-              ...currentDocument,
-              content: updatedContent,
-              createdAt: new Date(),
-            };
-
-            return [...currentDocuments, newDocument];
-          }
-          return currentDocuments;
-        },
-        { revalidate: false },
-      );
+          },
+          { revalidate: false },
+        );
+      } catch (error) {
+        console.error('Error in handleContentChange:', error);
+        toast.error(`Error updating document: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
     },
-    [artifact, mutate],
+    [artifact, mutate, handleApiError],
   );
 
   const debouncedHandleContentChange = useDebounceCallback(
@@ -189,14 +272,38 @@ function PureArtifact({
 
   const saveContent = useCallback(
     (updatedContent: string, debounce: boolean) => {
-      if (document && updatedContent !== document.content) {
-        setIsContentDirty(true);
-
-        if (debounce) {
-          debouncedHandleContentChange(updatedContent);
-        } else {
-          handleContentChange(updatedContent);
+      try {
+        if (!document) {
+          toast.error('Cannot save: Document not found');
+          return;
         }
+        
+        if (updatedContent !== document.content) {
+          setIsContentDirty(true);
+          
+          // Show a saving indicator to the user
+          const savingToast = debounce 
+            ? toast.loading('Saving document...', { duration: 2000 })
+            : toast.loading('Saving document...');
+
+          if (debounce) {
+            debouncedHandleContentChange(updatedContent);
+          } else {
+            handleContentChange(updatedContent)
+              .then(() => {
+                // If not debounced, we can dismiss the toast when complete
+                toast.dismiss(savingToast);
+              })
+              .catch((error) => {
+                toast.dismiss(savingToast);
+                console.error('Error in saveContent:', error);
+                toast.error(`Failed to save content: ${error instanceof Error ? error.message : 'Unknown error'}`);
+              });
+          }
+        }
+      } catch (error) {
+        console.error('Error in saveContent:', error);
+        toast.error(`Error saving content: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
     },
     [document, debouncedHandleContentChange, handleContentChange],
@@ -208,28 +315,53 @@ function PureArtifact({
     return documents[index].content ?? '';
   }
 
-  const handleVersionChange = (type: 'next' | 'prev' | 'toggle' | 'latest') => {
-    if (!documents) return;
-
-    if (type === 'latest') {
-      setCurrentVersionIndex(documents.length - 1);
-      setMode('edit');
+  const handleVersionChange = useCallback((type: 'next' | 'prev' | 'toggle' | 'latest') => {
+    if (!documents) {
+      toast.error('Cannot navigate versions: Document history not available');
+      return;
     }
 
-    if (type === 'toggle') {
-      setMode((mode) => (mode === 'edit' ? 'diff' : 'edit'));
-    }
-
-    if (type === 'prev') {
-      if (currentVersionIndex > 0) {
-        setCurrentVersionIndex((index) => index - 1);
+    try {
+      if (type === 'latest') {
+        setCurrentVersionIndex(documents.length - 1);
+        setMode('edit');
+        toast.success('Switched to latest version');
       }
-    } else if (type === 'next') {
-      if (currentVersionIndex < documents.length - 1) {
-        setCurrentVersionIndex((index) => index + 1);
+
+      if (type === 'toggle') {
+        setMode((mode) => {
+          const newMode = mode === 'edit' ? 'diff' : 'edit';
+          toast.info(`Switched to ${newMode} mode`);
+          return newMode;
+        });
       }
+
+      if (type === 'prev') {
+        if (currentVersionIndex > 0) {
+          setCurrentVersionIndex((index) => {
+            const newIndex = index - 1;
+            toast.info(`Viewing version ${newIndex + 1} of ${documents.length}`);
+            return newIndex;
+          });
+        } else {
+          toast.info('Already at oldest version');
+        }
+      } else if (type === 'next') {
+        if (currentVersionIndex < documents.length - 1) {
+          setCurrentVersionIndex((index) => {
+            const newIndex = index + 1;
+            toast.info(`Viewing version ${newIndex + 1} of ${documents.length}`);
+            return newIndex;
+          });
+        } else {
+          toast.info('Already at latest version');
+        }
+      }
+    } catch (error) {
+      console.error('Error in handleVersionChange:', error);
+      toast.error(`Failed to change document version: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
-  };
+  }, [documents, currentVersionIndex]);
 
   const [isToolbarVisible, setIsToolbarVisible] = useState(false);
 
@@ -257,11 +389,16 @@ function PureArtifact({
 
   useEffect(() => {
     if (artifact.documentId !== 'init') {
-      if (artifactDefinition.initialize) {
-        artifactDefinition.initialize({
-          documentId: artifact.documentId,
-          setMetadata,
-        });
+      try {
+        if (artifactDefinition.initialize) {
+          artifactDefinition.initialize({
+            documentId: artifact.documentId,
+            setMetadata,
+          });
+        }
+      } catch (error: unknown) {
+        console.error('Error in artifact initialization:', error);
+        toast.error(`Error initializing artifact: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
     }
   }, [artifact.documentId, artifactDefinition, setMetadata]);
