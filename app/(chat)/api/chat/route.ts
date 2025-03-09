@@ -207,64 +207,162 @@ export async function POST(request: Request) {
 
     return createDataStreamResponse({
       execute: (dataStream) => {
-        const result = streamText({
-          model: myProvider.languageModel(selectedChatModel),
-          system: enhancedSystemPrompt(selectedChatModel),
-          messages: processedMessages,
-          maxSteps: 5,
-          experimental_activeTools:
-            selectedChatModel === 'chat-model-reasoning'
-              ? []
-              : [
-                  'getWeather',
-                  'createDocument',
-                  'updateDocument',
-                  'requestSuggestions',
-                ],
-          experimental_transform: smoothStream({ chunking: 'word' }),
-          experimental_generateMessageId: generateUUID,
-          tools: {
-            getWeather,
-            createDocument: createDocument({ session, dataStream }),
-            updateDocument: updateDocument({ session, dataStream }),
-            requestSuggestions: requestSuggestions({
-              session,
-              dataStream,
-            }),
-          },
-          onFinish: async ({ response, reasoning }) => {
-            if (session.user?.id) {
-              try {
-                const sanitizedResponseMessages = sanitizeResponseMessages({
-                  messages: response.messages,
-                  reasoning,
-                });
-
-                await saveMessages({
-                  messages: sanitizedResponseMessages.map((message) => {
-                    return {
-                      id: message.id,
-                      chatId: id,
-                      role: message.role,
-                      content: message.content,
-                      createdAt: new Date(),
-                    };
-                  }),
-                });
-              } catch (error) {
-                console.error('Failed to save chat', error);
+        // Special handling for o1 model
+        if (selectedChatModel === 'gpt-o1') {
+          console.log('Using o1 model with reasoningEffort: medium and store: true');
+          
+          // For o1 model, we need to use a direct OpenAI client to add the store parameter
+          // Import the OpenAI client
+          const OpenAI = require('openai');
+          
+          // Get the OpenAI API key from environment variables
+          const apiKey = process.env.OPENAI_API_KEY;
+          if (!apiKey) {
+            throw new Error('OPENAI_API_KEY environment variable is not set');
+          }
+          
+          // Initialize the OpenAI client with the API key
+          const openai = new OpenAI.OpenAI({
+            apiKey: apiKey
+          });
+          
+          // Create a custom handler for o1 model
+          const handleO1Model = async () => {
+            try {
+              // First, convert the messages to the format expected by the OpenAI API
+              const apiMessages = processedMessages.map(msg => ({
+                role: msg.role,
+                content: msg.content
+              }));
+              
+              // Add the system message
+              apiMessages.unshift({
+                role: 'system',
+                content: enhancedSystemPrompt(selectedChatModel)
+              });
+              
+              // Make the API call with the required parameters
+              const response = await openai.chat.completions.create({
+                model: 'o1',
+                reasoningEffort: 'medium',
+                messages: apiMessages,
+                store: true,
+                stream: true
+              });
+              
+              // Process the streaming response
+              for await (const chunk of response) {
+                if (chunk.choices[0]?.delta?.content) {
+                  dataStream.writeData({
+                    type: 'text',
+                    content: chunk.choices[0].delta.content
+                  });
+                }
               }
+              
+              // Signal that the stream is complete
+              dataStream.writeData({ 
+                type: 'finish', 
+                content: '' 
+              });
+            } catch (error: unknown) {
+              console.error('Error with o1 model:', error);
+              
+              // Provide a more specific error message based on the error type
+              let errorMessage = 'An error occurred with the o1 model. Please try again or select a different model.';
+              
+              // Check if error is an Error object with a message property
+              if (error instanceof Error) {
+                if (error.message.includes('API key')) {
+                  errorMessage = 'OpenAI API key is missing or invalid. Please check your environment configuration.';
+                } else if (error.message.includes('rate limit') || error.message.includes('capacity')) {
+                  errorMessage = 'The AI service is currently experiencing high demand. Please try again in a few moments.';
+                } else if (error.message.includes('context length')) {
+                  errorMessage = 'The input is too large for the model to process. Please try with a smaller input.';
+                } else if (error.message.includes('store')) {
+                  errorMessage = 'There was an issue with the store parameter. Please try again with a different model.';
+                } else if (error.message.includes('reasoningEffort')) {
+                  errorMessage = 'There was an issue with the reasoningEffort parameter. Please try again with a different model.';
+                }
+              }
+              
+              // Write the error message to the data stream
+              dataStream.writeData({
+                type: 'error',
+                content: errorMessage
+              });
+              
+              // Signal that the stream is complete
+              dataStream.writeData({ 
+                type: 'finish', 
+                content: '' 
+              });
             }
-          },
-          experimental_telemetry: {
-            isEnabled: true,
-            functionId: 'stream-text',
-          },
-        });
+          };
+          
+          // Start the custom handler
+          handleO1Model();
+        } else {
+          // Use the standard model for other models
+          const result = streamText({
+            model: myProvider.languageModel(selectedChatModel),
+            system: enhancedSystemPrompt(selectedChatModel),
+            messages: processedMessages,
+            maxSteps: 5,
+            experimental_activeTools:
+              selectedChatModel === 'chat-model-reasoning'
+                ? []
+                : [
+                    'getWeather',
+                    'createDocument',
+                    'updateDocument',
+                    'requestSuggestions',
+                  ],
+            experimental_transform: smoothStream({ chunking: 'word' }),
+            experimental_generateMessageId: generateUUID,
+            tools: {
+              getWeather,
+              createDocument: createDocument({ session, dataStream }),
+              updateDocument: updateDocument({ session, dataStream }),
+              requestSuggestions: requestSuggestions({
+                session,
+                dataStream,
+              }),
+            },
+            onFinish: async ({ response, reasoning }) => {
+              if (session.user?.id) {
+                try {
+                  const sanitizedResponseMessages = sanitizeResponseMessages({
+                    messages: response.messages,
+                    reasoning,
+                  });
 
-        result.mergeIntoDataStream(dataStream, {
-          sendReasoning: true,
-        });
+                  await saveMessages({
+                    messages: sanitizedResponseMessages.map((message) => {
+                      return {
+                        id: message.id,
+                        chatId: id,
+                        role: message.role,
+                        content: message.content,
+                        createdAt: new Date(),
+                      };
+                    }),
+                  });
+                } catch (error) {
+                  console.error('Failed to save chat', error);
+                }
+              }
+            },
+            experimental_telemetry: {
+              isEnabled: true,
+              functionId: 'stream-text',
+            },
+          });
+
+          result.mergeIntoDataStream(dataStream, {
+            sendReasoning: true,
+          });
+        }
       },
       onError: (error: unknown) => {
         console.error('Chat API error:', error);

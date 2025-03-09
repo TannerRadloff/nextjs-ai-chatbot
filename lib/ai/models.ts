@@ -11,7 +11,9 @@ export const DEFAULT_CHAT_MODEL: string = 'gpt-o3-mini';
 export const myProvider = customProvider({
   languageModels: {
     'gpt-40': openai('gpt-4o'),
-    'gpt-o1': openai('gpt-o1'),
+    'gpt-o1': openai('o1', {
+      reasoningEffort: 'medium',
+    }),
     'gpt-o3-mini': openai('gpt-4o-mini'),
     'title-model': openai('gpt-4o'),
     'artifact-model': openai('gpt-4o-mini'),
