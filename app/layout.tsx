@@ -3,7 +3,6 @@ import { Toaster } from 'sonner';
 import Script from 'next/script';
 
 import { ThemeProvider } from '@/components/theme-provider';
-import { AnimationToggleWrapper } from '@/components/animation-toggle-wrapper';
 
 import './globals.css';
 
@@ -336,8 +335,6 @@ export default async function RootLayout({
         >
           {/* Animation elements are now created by the script */}
           <Script src="/animation-diagnostic.js" strategy="afterInteractive" />
-          {/* Use a client component wrapper to conditionally render the AnimationToggle */}
-          <AnimationToggleWrapper />
           <Toaster position="top-center" />
           {children}
         </ThemeProvider>

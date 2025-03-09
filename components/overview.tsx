@@ -12,7 +12,7 @@ export const Overview = () => {
     >
       <div className="rounded-xl p-6">
         <h1 className="text-2xl font-bold">
-          Welcome to HighQ - the Highest Quality, Highest IQ AI system on earth.
+          Welcome to HighQ (BETA)
         </h1>
       </div>
     </motion.div>
