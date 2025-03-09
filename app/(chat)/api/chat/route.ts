@@ -121,74 +121,55 @@ export async function POST(request: Request) {
       });
     }
 
-    // Create a clean array of messages for the API
-    // First, filter out document system messages
-    let apiMessages = messages.filter(message => 
-      !(message.role === 'system' && 'documentId' in message)
-    );
-
-    // Now retrieve and prepend document content as user messages to the conversation
-    // These will be visible to the model but not saved to the database
-    const documentContextMessages: Message[] = [];
-    for (const docMessage of documentMessages) {
-      if (docMessage && 'documentId' in docMessage && docMessage.documentId) {
-        try {
-          const documentId = String(docMessage.documentId);
-          console.log(`Retrieving document with ID: ${documentId}`);
-          const document = await getDocumentById({ id: documentId });
-          
-          if (document) {
-            const contentLength = document.content?.length || 0;
-            console.log(`Found document: ${document.title}, Content length: ${contentLength} chars`);
-            
-            // Check if we have valid content
-            const content = document.content || `[No content available for document: ${document.title}]`;
-            
-            // Ensure content isn't too large (OpenAI has token limits)
-            const trimmedContent = content.length > 10000 ? content.substring(0, 10000) + "... [content truncated due to length]" : content;
-            
-            // Add the document content as a user message at the start of the conversation
-            const contentPreview = trimmedContent.substring(0, 100) + '...';
-            console.log(`Adding document content to conversation: ${contentPreview}`);
-            
-            documentContextMessages.push({
-              id: generateUUID(),
-              role: 'user',
-              content: `Document: ${document.title}\n\n${trimmedContent}`,
-              createdAt: new Date(Date.now() - 60000) // Make it appear earlier
-            });
-            
-            // Add an assistant acknowledgment to create a proper conversation flow
-            documentContextMessages.push({
-              id: generateUUID(),
-              role: 'assistant',
-              content: `I've received the document "${document.title}". I'll use this information to help answer your questions.`,
-              createdAt: new Date(Date.now() - 50000) // Make it appear earlier
-            });
-          } else {
-            console.log(`Document with ID ${documentId} not found`);
+    // CRITICAL FIX: If we have document artifacts and a user message, modify the user message to include document content
+    let processedMessages = [...messages]; // Create a mutable copy of the messages array
+    
+    if (hasArtifacts && userMessage) {
+      try {
+        let documentContents = '';
+        
+        // Get the content of each referenced document
+        for (const docMessage of documentMessages) {
+          if (docMessage && 'documentId' in docMessage && docMessage.documentId) {
+            try {
+              const document = await getDocumentById({ id: String(docMessage.documentId) });
+              if (document && document.content) {
+                const truncatedContent = document.content.length > MAX_FILE_CONTENT_SIZE 
+                  ? document.content.substring(0, MAX_FILE_CONTENT_SIZE) + "... [content truncated]" 
+                  : document.content;
+                
+                documentContents += `\n\n--- Document: ${document.title} ---\n${truncatedContent}\n\n`;
+              }
+            } catch (error) {
+              console.error('Error retrieving document:', error);
+            }
           }
-        } catch (error) {
-          console.error('Error retrieving document for context:', error);
         }
+        
+        // Create a copy of the message array, replacing the user message with an enhanced version
+        if (documentContents) {
+          const enhancedUserMessage = {
+            ...userMessage,
+            content: `I'm asking about this document:\n${documentContents}\n\nMy question: ${userMessage.content}`
+          };
+          
+          const enhancedMessages = processedMessages.map(msg => 
+            msg.id === userMessage.id ? enhancedUserMessage : msg
+          );
+          
+          // Filter out system messages with document artifacts
+          processedMessages = enhancedMessages.filter(message => 
+            !(message.role === 'system' && 'documentId' in message)
+          );
+        }
+      } catch (error) {
+        console.error('Error enhancing user message with document content:', error);
       }
-    }
-
-    // Combine document context messages with regular messages
-    if (documentContextMessages.length > 0) {
-      // Place document context at the beginning of the conversation
-      apiMessages = [...documentContextMessages, ...apiMessages];
-      console.log(`Added ${documentContextMessages.length} document context messages to the conversation`);
-      console.log(`Total message count: ${apiMessages.length}`);
-      // Log the roles of all messages to verify structure
-      console.log(`Message roles sequence: ${apiMessages.map(m => m.role).join(', ')}`);
     }
 
     // Use the standard system prompt
     const enhancedSystemPrompt = (model: string) => {
-      const prompt = systemPrompt({ selectedChatModel: model });
-      console.log(`Using system prompt: ${prompt.substring(0, 100)}...`);
-      return prompt;
+      return systemPrompt({ selectedChatModel: model });
     };
 
     return createDataStreamResponse({
@@ -196,7 +177,7 @@ export async function POST(request: Request) {
         const result = streamText({
           model: myProvider.languageModel(selectedChatModel),
           system: enhancedSystemPrompt(selectedChatModel),
-          messages: apiMessages,
+          messages: processedMessages,
           maxSteps: 5,
           experimental_activeTools:
             selectedChatModel === 'chat-model-reasoning'
