@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenAI o1 Model Documentation</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1, h2, h3 {
+            color: #333;
+        }
+        a {
+            color: #0066cc;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        .section {
+            margin-bottom: 30px;
+            border: 1px solid #ddd;
+            padding: 20px;
+            border-radius: 5px;
+        }
+        code {
+            background-color: #f5f5f5;
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-family: monospace;
+        }
+        pre {
+            background-color: #f5f5f5;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>OpenAI o1 Model Documentation</h1>
+    
+    <div class="section">
+        <h2>Official Documentation Links</h2>
+        <ul>
+            <li><a href="https://platform.openai.com/docs/models/o1" target="_blank">o1 Model Overview</a></li>
+            <li><a href="https://platform.openai.com/docs/api-reference/chat/create" target="_blank">Chat Completions API Reference</a></li>
+            <li><a href="https://platform.openai.com/docs/guides/text-generation/chat-completions-api" target="_blank">Chat Completions API Guide</a></li>
+        </ul>
+    </div>
+    
+    <div class="section">
+        <h2>o1 Model Parameters</h2>
+        <p>Based on the OpenAI documentation, the o1 model supports the following parameters:</p>
+        <ul>
+            <li><code>model</code>: "o1" (required)</li>
+            <li><code>messages</code>: Array of message objects with role and content (required)</li>
+            <li><code>reasoningEffort</code>: "low" | "medium" | "high" (default: "medium")</li>
+            <li><code>store</code>: boolean (default: false)</li>
+            <li><code>stream</code>: boolean (default: false)</li>
+            <li>Other standard parameters (temperature, max_tokens, etc.)</li>
+        </ul>
+    </div>
+    
+    <div class="section">
+        <h2>Streaming Response Structure</h2>
+        <p>When streaming is enabled, the response is returned as a series of chunks with the following structure:</p>
+        <pre>
+{
+  "id": "chatcmpl-123",
+  "object": "chat.completion.chunk",
+  "created": 1694268190,
+  "model": "o1",
+  "choices": [
+    {
+      "index": 0,
+      "delta": {
+        "content": "Hello", // Content chunk (may be empty if this chunk contains reasoning)
+        "reasoning": "Let me think..." // Reasoning chunk (may be empty if this chunk contains content)
+      },
+      "finish_reason": null // Only present in the final chunk
+    }
+  ]
+}
+        </pre>
+    </div>
+    
+    <div class="section">
+        <h2>Our Implementation</h2>
+        <p>Our implementation correctly handles:</p>
+        <ul>
+            <li>Setting the <code>reasoningEffort</code> parameter to "medium"</li>
+            <li>Setting the <code>store</code> parameter to true</li>
+            <li>Enabling streaming with <code>stream: true</code></li>
+            <li>Processing content chunks from <code>choices[0].delta.content</code></li>
+            <li>Processing reasoning chunks from <code>choices[0].delta.reasoning</code></li>
+            <li>Formatting messages for the UI with the correct structure</li>
+        </ul>
+    </div>
+    
+    <div class="section">
+        <h2>Example API Call</h2>
+        <pre>
+const response = await openai.chat.completions.create({
+  model: "o1",
+  reasoningEffort: "medium",
+  messages: apiMessages,
+  store: true,
+  stream: true
+});
+
+// Process the streaming response
+for await (const chunk of response) {
+  // Check for reasoning in the response
+  if (chunk.choices[0]?.delta?.reasoning) {
+    // Process reasoning
+  }
+  
+  // Check for content in the response
+  if (chunk.choices[0]?.delta?.content) {
+    // Process content
+  }
+}
+        </pre>
+    </div>
+</body>
+</html> 
