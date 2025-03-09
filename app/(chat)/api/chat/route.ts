@@ -250,13 +250,66 @@ export async function POST(request: Request) {
                 stream: true
               });
               
+              // Create a message ID for the assistant's response
+              const messageId = generateUUID();
+              
+              // Initialize the full response content and reasoning
+              let fullContent = '';
+              let reasoning = '';
+              let isReasoningSection = false;
+              
               // Process the streaming response
               for await (const chunk of response) {
+                // Check for reasoning in the response
+                if (chunk.choices[0]?.delta?.reasoning) {
+                  isReasoningSection = true;
+                  reasoning += chunk.choices[0].delta.reasoning;
+                  
+                  // Send reasoning to the data stream
+                  dataStream.writeData({
+                    type: 'reasoning',
+                    content: chunk.choices[0].delta.reasoning
+                  });
+                }
+                
+                // Check for content in the response
                 if (chunk.choices[0]?.delta?.content) {
+                  const content = chunk.choices[0].delta.content;
+                  fullContent += content;
+                  
+                  // Send the content chunk to the data stream
                   dataStream.writeData({
                     type: 'text',
-                    content: chunk.choices[0].delta.content
+                    content: content
                   });
+                }
+              }
+              
+              // Create a proper message structure for the UI
+              const assistantMessage = {
+                id: messageId,
+                role: 'assistant',
+                content: fullContent,
+                createdAt: new Date(),
+                reasoning: reasoning.length > 0 ? reasoning : undefined
+              };
+              
+              // Save the message to the database
+              if (session.user?.id) {
+                try {
+                  await saveMessages({
+                    messages: [
+                      {
+                        id: messageId,
+                        chatId: id,
+                        role: 'assistant',
+                        content: fullContent,
+                        createdAt: new Date(),
+                      }
+                    ],
+                  });
+                } catch (error) {
+                  console.error('Failed to save o1 model response:', error);
                 }
               }
               
@@ -264,6 +317,12 @@ export async function POST(request: Request) {
               dataStream.writeData({ 
                 type: 'finish', 
                 content: '' 
+              });
+              
+              // Send the complete message to the client
+              dataStream.writeData({
+                type: 'message',
+                content: JSON.stringify(assistantMessage)
               });
             } catch (error: unknown) {
               console.error('Error with o1 model:', error);
@@ -286,6 +345,34 @@ export async function POST(request: Request) {
                 }
               }
               
+              // Create an error message for the UI
+              const errorMessageId = generateUUID();
+              const errorResponseMessage = {
+                id: errorMessageId,
+                role: 'assistant',
+                content: errorMessage,
+                createdAt: new Date()
+              };
+              
+              // Save the error message to the database
+              if (session.user?.id) {
+                try {
+                  await saveMessages({
+                    messages: [
+                      {
+                        id: errorMessageId,
+                        chatId: id,
+                        role: 'assistant',
+                        content: errorMessage,
+                        createdAt: new Date(),
+                      }
+                    ],
+                  });
+                } catch (saveError) {
+                  console.error('Failed to save error message:', saveError);
+                }
+              }
+              
               // Write the error message to the data stream
               dataStream.writeData({
                 type: 'error',
@@ -296,6 +383,12 @@ export async function POST(request: Request) {
               dataStream.writeData({ 
                 type: 'finish', 
                 content: '' 
+              });
+              
+              // Send the error message to the client
+              dataStream.writeData({
+                type: 'message',
+                content: JSON.stringify(errorResponseMessage)
               });
             }
           };

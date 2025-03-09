@@ -17,14 +17,20 @@ export type DataStreamDelta = {
     | 'suggestion'
     | 'clear'
     | 'finish'
-    | 'kind';
+    | 'kind'
+    | 'message'
+    | 'error'
+    | 'text'
+    | 'reasoning';
   content: string | Suggestion;
 };
 
 export function DataStreamHandler({ id }: { id: string }) {
-  const { data: dataStream } = useChat({ id });
+  const { data: dataStream, setMessages } = useChat({ id });
   const { artifact, setArtifact, setMetadata } = useArtifact();
   const lastProcessedIndex = useRef(-1);
+  const reasoningRef = useRef('');
+  const currentMessageIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!dataStream?.length) return;
@@ -43,6 +49,39 @@ export function DataStreamHandler({ id }: { id: string }) {
           setArtifact,
           setMetadata,
         });
+      }
+
+      // Handle reasoning type for o1 model responses
+      if (delta.type === 'reasoning' && typeof delta.content === 'string') {
+        reasoningRef.current += delta.content;
+      }
+
+      // Handle message type for o1 model responses
+      if (delta.type === 'message' && typeof delta.content === 'string') {
+        try {
+          const message = JSON.parse(delta.content);
+          if (message && message.role === 'assistant') {
+            currentMessageIdRef.current = message.id;
+            
+            // Add reasoning if we've collected any
+            if (reasoningRef.current.length > 0) {
+              message.reasoning = reasoningRef.current;
+              // Reset reasoning for next message
+              reasoningRef.current = '';
+            }
+            
+            setMessages((prevMessages) => {
+              // Check if the message already exists
+              const exists = prevMessages.some(m => m.id === message.id);
+              if (exists) return prevMessages;
+              
+              // Add the new message
+              return [...prevMessages, message];
+            });
+          }
+        } catch (error) {
+          console.error('Error parsing message:', error);
+        }
       }
 
       setArtifact((draftArtifact) => {
@@ -90,7 +129,7 @@ export function DataStreamHandler({ id }: { id: string }) {
         }
       });
     });
-  }, [dataStream, setArtifact, setMetadata, artifact]);
+  }, [dataStream, setArtifact, setMetadata, artifact, setMessages]);
 
   return null;
 }
