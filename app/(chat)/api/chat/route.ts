@@ -268,8 +268,15 @@ export async function POST(request: Request) {
       },
       onError: (error: unknown) => {
         console.error('Chat API error:', error);
-        if (error instanceof Error && error.message && error.message.includes('context length')) {
-          return 'The file content is too large for the model to process. Please try with a smaller file or extract the most relevant parts.';
+        if (error instanceof Error) {
+          // Check for specific error types
+          if (error.message.includes('context length')) {
+            return 'The file content is too large for the model to process. Please try with a smaller file or extract the most relevant parts.';
+          } else if (error.message.includes('model') || error.message.includes('Model')) {
+            return 'There was an issue with the selected AI model. Please try selecting a different model from the dropdown.';
+          } else if (error.message.includes('rate limit') || error.message.includes('capacity')) {
+            return 'The AI service is currently experiencing high demand. Please try again in a few moments.';
+          }
         }
         return 'Oops, an error occurred while processing your request. Please try again with a smaller file or different content.';
       },

@@ -66,6 +66,10 @@ export function Chat({
           errorMessage = 'The request timed out. Please try with a simpler query or smaller file.';
         } else if (error.message.includes('network') || error.message.includes('connection')) {
           errorMessage = 'Network connection issue. Please check your internet connection and try again.';
+        } else if (error.message.includes('model') || error.message.includes('Model')) {
+          errorMessage = 'There was an issue with the selected AI model. Please try selecting a different model from the dropdown.';
+        } else if (error.message.includes('rate limit') || error.message.includes('capacity')) {
+          errorMessage = 'The AI service is currently experiencing high demand. Please try again in a few moments.';
         }
       }
       
